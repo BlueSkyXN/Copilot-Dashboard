@@ -1,10 +1,7 @@
 """Copilot Dashboard - FastAPI backend for GitHub Copilot session analytics."""
 from __future__ import annotations
 
-import importlib.util
-import sys
 from collections import defaultdict
-from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -13,22 +10,16 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-# ─── Import copilot-manager.py (hyphenated filename requires importlib) ─────────
-_MANAGER_PATH = Path(__file__).resolve().parent.parent / "copilot-hud" / "local" / "copilot-manager.py"
-spec = importlib.util.spec_from_file_location("copilot_manager", str(_MANAGER_PATH))
-mod = importlib.util.module_from_spec(spec)  # type: ignore
-sys.modules["copilot_manager"] = mod  # Required for @dataclass to resolve module
-spec.loader.exec_module(mod)  # type: ignore
-
-# Re-export what we need
-load_all_sessions = mod.load_all_sessions
-load_session = mod.load_session
-SessionInfo = mod.SessionInfo
-PRICING = mod.PRICING
-COPILOT_HOME = mod.COPILOT_HOME
-calc_cost_from_metrics = mod.calc_cost_from_metrics
-_get_model_pricing = mod._get_model_pricing
-parse_date = mod.parse_date
+from lib.session_parser import (
+    COPILOT_HOME,
+    PRICING,
+    _get_model_pricing,
+    calc_cost_from_metrics,
+    load_all_sessions,
+    load_session,
+    parse_date,
+    SessionInfo,
+)
 
 # ─── App setup ──────────────────────────────────────────────────────────────────
 app = FastAPI(title="Copilot Dashboard")
