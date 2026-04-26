@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🔭 Copilot Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  body { background: #0f172a; color: #f1f5f9; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
+  .spinner { border: 3px solid #334155; border-top-color: #6366f1; border-radius: 50%; width: 24px; height: 24px; animation: spin .6s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  table th { position: sticky; top: 0; background: #1e293b; z-index: 1; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #0f172a; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  .fade-in { animation: fadeIn .3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body x-data="dashboard()" x-init="init()">
+
+<!-- Header -->
+<header class="border-b border-slate-700 px-6 py-4 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <span class="text-2xl">🔭</span>
+    <h1 class="text-xl font-bold text-slate-100">Copilot Dashboard</h1>
+  </div>
+  <div class="flex items-center gap-4 text-sm">
+    <span class="text-slate-400" x-text="overview ? 'Last loaded: ' + formatDateTime(overview.cache_loaded_at) : ''"></span>
+    <button @click="refresh()" :disabled="loading"
+      class="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition disabled:opacity-50 flex items-center gap-2">
+      <template x-if="loading"><span class="spinner" style="width:14px;height:14px;border-width:2px;"></span></template>
+      <span>↻ Refresh</span>
+    </button>
+  </div>
+</header>
+
+<main class="max-w-[1440px] mx-auto px-6 py-6 space-y-6">
+
+  <!-- Loading -->
+  <template x-if="!overview && loading">
+    <div class="flex justify-center py-20"><div class="spinner"></div><span class="ml-3 text-slate-400">Loading sessions…</span></div>
+  </template>
+
+  <template x-if="overview">
+  <div class="space-y-6 fade-in">
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="card px-5 py-4">
+        <div class="text-slate-400 text-xs uppercase tracking-wide mb-1">Total Sessions</div>
+        <div class="text-2xl font-bold" x-text="overview.total_sessions.toLocaleString()"></div>
+        <div class="text-xs text-slate-500 mt-1" x-text="overview.sessions_with_data + ' with event data'"></div>
+      </div>
+      <div class="card px-5 py-4">
+        <div class="text-slate-400 text-xs uppercase tracking-wide mb-1">Total Cost</div>
+        <div class="text-2xl font-bold text-amber-400" x-text="fmtCost(overview.total_cost)"></div>
+        <div class="text-xs text-slate-500 mt-1" x-text="'Top: ' + fmtCost(overview.most_expensive_session?.cost || 0)"></div>
+      </div>
+      <div class="card px-5 py-4">
+        <div class="text-slate-400 text-xs uppercase tracking-wide mb-1">Output Tokens</div>
+        <div class="text-2xl font-bold text-cyan-400" x-text="overview.total_output_tokens + 'M'"></div>
+        <div class="text-xs text-slate-500 mt-1" x-text="'Input: ' + fmtTokens(overview.total_input_tokens)"></div>
+      </div>
+      <div class="card px-5 py-4">
+        <div class="text-slate-400 text-xs uppercase tracking-wide mb-1">Cache Hit Rate</div>
+        <div class="text-2xl font-bold text-emerald-400" x-text="overview.cache_hit_rate + '%'"></div>
+        <div class="text-xs text-slate-500 mt-1" x-text="'Cache reads: ' + fmtTokens(overview.total_cache_read_tokens)"></div>
+      </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <!-- Cost Trend -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-slate-300">Cost Trend</h2>
+          <div class="flex gap-1">
+            <template x-for="p in ['30d','90d','All']">
+              <button @click="trendPeriod = p; renderCostChart()"
+                :class="trendPeriod === p ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'"
+                class="px-3 py-1 rounded text-xs font-medium transition" x-text="p"></button>
+            </template>
+          </div>
+        </div>
+        <div style="height:260px;"><canvas id="costChart"></canvas></div>
+      </div>
+      <!-- Model Distribution -->
+      <div class="card p-5">
+        <h2 class="text-sm font-semibold text-slate-300 mb-4">Model Distribution (by Cost)</h2>
+        <div style="height:260px;"><canvas id="modelChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Model Table -->
+    <div class="card overflow-hidden">
+      <div class="px-5 py-3 border-b border-slate-700">
+        <h2 class="text-sm font-semibold text-slate-300">Model Breakdown</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-xs text-slate-400 uppercase tracking-wide border-b border-slate-700">
+              <th class="text-left px-4 py-3">Model</th>
+              <th class="text-right px-4 py-3">Requests</th>
+              <th class="text-right px-4 py-3">Output Tok</th>
+              <th class="text-right px-4 py-3">Input Tok</th>
+              <th class="text-right px-4 py-3">Cache Read</th>
+              <th class="text-right px-4 py-3">Cache%</th>
+              <th class="text-right px-4 py-3">$/M In</th>
+              <th class="text-right px-4 py-3">$/M Out</th>
+              <th class="text-right px-4 py-3">Est. Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="m in modelData.models" :key="m.model">
+              <tr class="border-b border-slate-700/50 hover:bg-slate-800/50 transition">
+                <td class="px-4 py-2.5 font-medium text-slate-200" x-text="m.model"></td>
+                <td class="px-4 py-2.5 text-right text-slate-300" x-text="m.requests.toLocaleString()"></td>
+                <td class="px-4 py-2.5 text-right text-cyan-400" x-text="fmtTokens(m.output_tokens)"></td>
+                <td class="px-4 py-2.5 text-right text-slate-300" x-text="fmtTokens(m.input_tokens)"></td>
+                <td class="px-4 py-2.5 text-right text-slate-300" x-text="fmtTokens(m.cache_read_tokens)"></td>
+                <td class="px-4 py-2.5 text-right text-emerald-400" x-text="m.cache_hit_rate + '%'"></td>
+                <td class="px-4 py-2.5 text-right text-slate-500" x-text="'$' + m.input_price"></td>
+                <td class="px-4 py-2.5 text-right text-slate-500" x-text="'$' + m.output_price"></td>
+                <td class="px-4 py-2.5 text-right font-semibold text-amber-400" x-text="fmtCost(m.cost)"></td>
+              </tr>
+            </template>
+          </tbody>
+          <tfoot x-show="modelData.totals">
+            <tr class="border-t-2 border-slate-600 font-bold bg-slate-800/60">
+              <td class="px-4 py-2.5 text-slate-200">TOTAL</td>
+              <td class="px-4 py-2.5 text-right text-slate-200" x-text="modelData.totals?.total_requests?.toLocaleString()"></td>
+              <td class="px-4 py-2.5 text-right text-cyan-400" x-text="fmtTokens(modelData.totals?.total_output_tokens)"></td>
+              <td class="px-4 py-2.5 text-right text-slate-200" x-text="fmtTokens(modelData.totals?.total_input_tokens)"></td>
+              <td class="px-4 py-2.5 text-right text-slate-200" x-text="fmtTokens(modelData.totals?.total_cache_read_tokens)"></td>
+              <td class="px-4 py-2.5 text-right text-emerald-400" x-text="modelData.totals?.cache_hit_rate + '%'"></td>
+              <td class="px-4 py-2.5 text-right text-slate-500">-</td>
+              <td class="px-4 py-2.5 text-right text-slate-500">-</td>
+              <td class="px-4 py-2.5 text-right text-amber-400" x-text="fmtCost(modelData.totals?.total_cost)"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- Session List -->
+    <div class="card overflow-hidden">
+      <div class="px-5 py-3 border-b border-slate-700 flex flex-wrap items-center gap-3">
+        <h2 class="text-sm font-semibold text-slate-300 mr-auto">Sessions</h2>
+        <select x-model="filterRepo" @change="fetchSessions()"
+          class="bg-slate-700 border-slate-600 text-slate-200 text-xs rounded px-2 py-1.5">
+          <option value="">All Repos</option>
+          <template x-for="r in repoList" :key="r.repo">
+            <option :value="r.repo" x-text="r.repo + ' (' + r.count + ')'"></option>
+          </template>
+        </select>
+        <select x-model="filterModel" @change="fetchSessions()"
+          class="bg-slate-700 border-slate-600 text-slate-200 text-xs rounded px-2 py-1.5">
+          <option value="">All Models</option>
+          <template x-for="m in modelData.models" :key="m.model">
+            <option :value="m.model" x-text="m.model"></option>
+          </template>
+        </select>
+        <input type="date" x-model="filterSince" @change="fetchSessions()"
+          class="bg-slate-700 border-slate-600 text-slate-200 text-xs rounded px-2 py-1.5">
+        <select x-model="filterSort" @change="fetchSessions()"
+          class="bg-slate-700 border-slate-600 text-slate-200 text-xs rounded px-2 py-1.5">
+          <option value="date">Sort: Date</option>
+          <option value="cost">Sort: Cost</option>
+          <option value="tokens">Sort: Tokens</option>
+          <option value="tools">Sort: Tools</option>
+          <option value="premium">Sort: Premium</option>
+        </select>
+      </div>
+      <div class="overflow-x-auto" style="max-height: 600px; overflow-y: auto;">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-xs text-slate-400 uppercase tracking-wide border-b border-slate-700">
+              <th class="text-left px-4 py-3">Date</th>
+              <th class="text-left px-4 py-3">Session</th>
+              <th class="text-left px-4 py-3">Repo</th>
+              <th class="text-left px-4 py-3">Model</th>
+              <th class="text-right px-4 py-3">Cost</th>
+              <th class="text-right px-4 py-3">Output</th>
+              <th class="text-right px-4 py-3">Tools</th>
+              <th class="text-right px-4 py-3">Cache%</th>
+              <th class="text-center px-4 py-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="s in sessionList" :key="s.id">
+              <tr class="border-b border-slate-700/50 hover:bg-slate-800/50 cursor-pointer transition"
+                  @click="toggleDetail(s.id)">
+                <td class="px-4 py-2.5 text-slate-400 whitespace-nowrap" x-text="formatDate(s.created_at)"></td>
+                <td class="px-4 py-2.5 text-slate-200 max-w-[280px] truncate" x-text="s.summary || s.id.substring(0,12) + '…'"></td>
+                <td class="px-4 py-2.5 text-slate-400 max-w-[160px] truncate" x-text="s.repository || '-'"></td>
+                <td class="px-4 py-2.5 text-slate-400 text-xs" x-text="s.model || '-'"></td>
+                <td class="px-4 py-2.5 text-right font-medium text-amber-400" x-text="fmtCost(s.cost)"></td>
+                <td class="px-4 py-2.5 text-right text-cyan-400" x-text="fmtTokens(s.output_tokens)"></td>
+                <td class="px-4 py-2.5 text-right text-slate-300" x-text="s.tool_calls || '-'"></td>
+                <td class="px-4 py-2.5 text-right text-emerald-400" x-text="s.cache_hit_rate > 0 ? s.cache_hit_rate + '%' : '-'"></td>
+                <td class="px-4 py-2.5 text-center">
+                  <span :class="s.has_shutdown ? 'bg-emerald-900/50 text-emerald-400' : 'bg-amber-900/50 text-amber-400'"
+                    class="text-xs px-2 py-0.5 rounded-full" x-text="s.has_shutdown ? '✓' : '…'"></span>
+                </td>
+              </tr>
+              <!-- Expanded detail row -->
+              <template x-if="expandedId === s.id">
+                <tr class="bg-slate-800/80 fade-in">
+                  <td colspan="9" class="px-6 py-4">
+                    <template x-if="!detailData">
+                      <div class="flex items-center gap-2 text-slate-400"><div class="spinner"></div> Loading…</div>
+                    </template>
+                    <template x-if="detailData">
+                      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                        <div><span class="text-slate-500">ID:</span> <span class="text-slate-300 font-mono" x-text="detailData.id"></span></div>
+                        <div><span class="text-slate-500">Branch:</span> <span class="text-slate-300" x-text="detailData.branch || '-'"></span></div>
+                        <div><span class="text-slate-500">Account:</span> <span class="text-slate-300" x-text="detailData.account || '-'"></span></div>
+                        <div><span class="text-slate-500">Host:</span> <span class="text-slate-300" x-text="detailData.host_type || '-'"></span></div>
+                        <div><span class="text-slate-500">Input Tokens:</span> <span class="text-slate-300" x-text="fmtTokens(detailData.input_tokens)"></span></div>
+                        <div><span class="text-slate-500">Output Tokens:</span> <span class="text-cyan-400" x-text="fmtTokens(detailData.output_tokens)"></span></div>
+                        <div><span class="text-slate-500">Cache Read:</span> <span class="text-slate-300" x-text="fmtTokens(detailData.cache_read_tokens)"></span></div>
+                        <div><span class="text-slate-500">Cache Write:</span> <span class="text-slate-300" x-text="fmtTokens(detailData.cache_write_tokens)"></span></div>
+                        <div><span class="text-slate-500">Subagents:</span> <span class="text-slate-300" x-text="detailData.subagent_count || 0"></span></div>
+                        <div><span class="text-slate-500">Compactions:</span> <span class="text-slate-300" x-text="detailData.compactions || 0"></span></div>
+                        <div><span class="text-slate-500">Premium Req:</span> <span class="text-slate-300" x-text="detailData.premium_requests || 0"></span></div>
+                        <div><span class="text-slate-500">API Duration:</span> <span class="text-slate-300" x-text="fmtDuration(detailData.api_duration_ms)"></span></div>
+                        <div><span class="text-slate-500">Lines +/-:</span> <span class="text-emerald-400" x-text="'+' + (detailData.lines_added||0)"></span> / <span class="text-red-400" x-text="'-' + (detailData.lines_removed||0)"></span></div>
+                        <div><span class="text-slate-500">Files Modified:</span> <span class="text-slate-300" x-text="detailData.files_modified?.length || 0"></span></div>
+                        <div><span class="text-slate-500">CWD:</span> <span class="text-slate-400 font-mono truncate" x-text="detailData.cwd || '-'"></span></div>
+                        <div><span class="text-slate-500">Messages:</span> <span class="text-slate-300" x-text="detailData.assistant_message_count || 0"></span></div>
+                        <!-- Tool distribution -->
+                        <template x-if="detailData.tool_distribution && Object.keys(detailData.tool_distribution).length > 0">
+                          <div class="col-span-full">
+                            <span class="text-slate-500">Tools: </span>
+                            <template x-for="[tool, count] in Object.entries(detailData.tool_distribution).sort((a,b)=>b[1]-a[1])">
+                              <span class="inline-block bg-slate-700 rounded px-2 py-0.5 mr-1 mb-1 text-slate-300">
+                                <span x-text="tool"></span>: <span class="text-indigo-400" x-text="count"></span>
+                              </span>
+                            </template>
+                          </div>
+                        </template>
+                        <!-- Model metrics -->
+                        <template x-if="detailData.model_metrics && Object.keys(detailData.model_metrics).length > 0">
+                          <div class="col-span-full">
+                            <span class="text-slate-500">Models: </span>
+                            <template x-for="[model, data] in Object.entries(detailData.model_metrics)">
+                              <span class="inline-block bg-slate-700 rounded px-2 py-0.5 mr-1 mb-1 text-slate-300">
+                                <span x-text="model"></span>: <span class="text-cyan-400" x-text="fmtTokens(data?.usage?.outputTokens || 0)"></span> out
+                              </span>
+                            </template>
+                          </div>
+                        </template>
+                      </div>
+                    </template>
+                  </td>
+                </tr>
+              </template>
+            </template>
+          </tbody>
+        </table>
+        <div x-show="sessionList.length === 0 && !loading" class="text-center py-10 text-slate-500">No sessions found</div>
+      </div>
+      <!-- Load more -->
+      <div class="px-5 py-3 border-t border-slate-700 flex justify-between items-center text-xs text-slate-400">
+        <span x-text="sessionList.length + ' sessions shown'"></span>
+        <button @click="sessionLimit += 50; fetchSessions()" class="text-indigo-400 hover:text-indigo-300">Load more…</button>
+      </div>
+    </div>
+
+  </div>
+  </template>
+</main>
+
+<script>
+const CHART_COLORS = ['#6366f1','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+
+function dashboard() {
+  return {
+    loading: false,
+    overview: null,
+    costTrend: [],
+    modelData: { models: [], totals: {} },
+    sessionList: [],
+    repoList: [],
+    trendPeriod: '30d',
+    filterRepo: '',
+    filterModel: '',
+    filterSince: '',
+    filterSort: 'date',
+    sessionLimit: 50,
+    expandedId: null,
+    detailData: null,
+    costChart: null,
+    modelChart: null,
+
+    async init() {
+      this.loading = true;
+      await Promise.all([
+        this.fetchOverview(),
+        this.fetchCostTrend(),
+        this.fetchModels(),
+        this.fetchSessions(),
+        this.fetchRepos(),
+      ]);
+      this.loading = false;
+      this.$nextTick(() => { this.renderCostChart(); this.renderModelChart(); });
+    },
+
+    async refresh() {
+      this.loading = true;
+      await fetch('/api/refresh');
+      await this.init();
+    },
+
+    async fetchOverview() { this.overview = await (await fetch('/api/overview')).json(); },
+    async fetchCostTrend() { this.costTrend = await (await fetch('/api/cost-trend')).json(); },
+    async fetchModels() { this.modelData = await (await fetch('/api/models')).json(); },
+    async fetchRepos() { this.repoList = await (await fetch('/api/repos')).json(); },
+
+    async fetchSessions() {
+      const p = new URLSearchParams({ limit: this.sessionLimit, sort: this.filterSort });
+      if (this.filterRepo) p.set('repo', this.filterRepo);
+      if (this.filterModel) p.set('model', this.filterModel);
+      if (this.filterSince) p.set('since', this.filterSince);
+      this.sessionList = await (await fetch('/api/sessions?' + p)).json();
+    },
+
+    async toggleDetail(id) {
+      if (this.expandedId === id) { this.expandedId = null; this.detailData = null; return; }
+      this.expandedId = id;
+      this.detailData = null;
+      this.detailData = await (await fetch('/api/session/' + id)).json();
+    },
+
+    renderCostChart() {
+      let data = [...this.costTrend];
+      if (this.trendPeriod === '30d') data = data.slice(-30);
+      else if (this.trendPeriod === '90d') data = data.slice(-90);
+
+      const ctx = document.getElementById('costChart');
+      if (!ctx) return;
+      if (this.costChart) this.costChart.destroy();
+
+      this.costChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.map(d => d.date.slice(5)),
+          datasets: [{
+            label: 'Daily Cost ($)',
+            data: data.map(d => d.cost),
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99,102,241,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: data.length > 60 ? 0 : 3,
+            pointHoverRadius: 5,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: (items) => data[items[0].dataIndex]?.date || '',
+                afterLabel: (item) => {
+                  const d = data[item.dataIndex];
+                  return d ? `Sessions: ${d.sessions}${d.has_full_data ? '' : ' (partial)'}` : '';
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color: '#64748b', maxRotation: 0, autoSkipPadding: 20 }, grid: { color: '#1e293b' } },
+            y: { ticks: { color: '#64748b', callback: v => '$' + v }, grid: { color: '#1e293b' } }
+          }
+        }
+      });
+    },
+
+    renderModelChart() {
+      const ctx = document.getElementById('modelChart');
+      if (!ctx || !this.modelData.models.length) return;
+      if (this.modelChart) this.modelChart.destroy();
+
+      const top = this.modelData.models.slice(0, 8);
+      this.modelChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: top.map(m => m.model),
+          datasets: [{
+            data: top.map(m => m.cost),
+            backgroundColor: CHART_COLORS,
+            borderColor: '#0f172a',
+            borderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'right', labels: { color: '#94a3b8', boxWidth: 12, padding: 8, font: { size: 11 } } },
+            tooltip: { callbacks: { label: (item) => `${item.label}: $${item.raw.toFixed(2)}` } }
+          }
+        }
+      });
+    },
+
+    // Formatters
+    fmtTokens(n) {
+      if (!n || n === 0) return '-';
+      if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return n.toString();
+    },
+    fmtCost(c) {
+      if (!c || c === 0) return '-';
+      if (c >= 100) return '$' + c.toLocaleString('en-US', {maximumFractionDigits: 0});
+      if (c >= 1) return '$' + c.toFixed(2);
+      return '$' + c.toFixed(3);
+    },
+    fmtDuration(ms) {
+      if (!ms) return '-';
+      const s = ms / 1000;
+      if (s < 60) return s.toFixed(0) + 's';
+      const m = s / 60;
+      if (m < 60) return m.toFixed(1) + 'm';
+      return (m / 60).toFixed(1) + 'h';
+    },
+    formatDate(d) {
+      if (!d) return '-';
+      try { return new Date(d).toLocaleDateString('en-CA') + ' ' + new Date(d).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}); }
+      catch { return d.substring(0, 16); }
+    },
+    formatDateTime(d) {
+      if (!d) return '';
+      try { return new Date(d).toLocaleString(); }
+      catch { return d; }
+    },
+  };
+}
+</script>
+</body>
+</html>
