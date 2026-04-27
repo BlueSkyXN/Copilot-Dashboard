@@ -8,13 +8,15 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from lib.session_parser import (
     COPILOT_HOME,
     PRICING,
     _get_model_pricing,
     calc_cost_from_metrics,
+    get_db_connection,
+    get_db_session_info,
     load_all_sessions,
     load_session,
     parse_date,
@@ -107,7 +109,7 @@ def index():
     return FileResponse(str(Path(__file__).parent / "web" / "index.html"))
 
 
-@app.get("/api/refresh")
+@app.post("/api/refresh")
 def refresh():
     _load_cache()
     return {"status": "ok", "sessions": len(_session_cache), "loaded_at": _cache_loaded_at.isoformat() if _cache_loaded_at else None}
@@ -284,17 +286,27 @@ def sessions(
 
 @app.get("/api/session/{session_id}")
 def session_detail(session_id: str):
-    # Support short ID prefix matching
+    if len(session_id) < 8:
+        return JSONResponse({"error": "ID prefix too short (min 8 chars)"}, status_code=400)
+    # Support short ID prefix matching (min 8 chars)
     for s in _session_cache:
         if s.id.startswith(session_id) or s.id == session_id:
-            # Reload with detailed=True for full data
             session_dir = Path(COPILOT_HOME) / "session-state" / s.id
             if session_dir.exists():
                 detailed = load_session(session_dir, detailed=True)
                 if detailed:
-                    return _session_to_dict(detailed, short=False)
+                    result = _session_to_dict(detailed, short=False)
+                    # Enrich with SQLite data (turn counts, files, refs)
+                    conn = get_db_connection(COPILOT_HOME)
+                    if conn:
+                        try:
+                            db_info = get_db_session_info(conn, s.id)
+                            result.update(db_info)
+                        finally:
+                            conn.close()
+                    return result
             return _session_to_dict(s, short=False)
-    return {"error": "Session not found"}
+    return JSONResponse({"error": "Session not found"}, status_code=404)
 
 
 @app.get("/api/pricing")
@@ -314,4 +326,4 @@ def repos():
 # ─── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8765)
+    uvicorn.run(app, host="127.0.0.1", port=8765)

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🔭 Copilot Dashboard</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
 <style>
   body { background: #0f172a; color: #f1f5f9; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
   .card { background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
@@ -313,28 +313,40 @@ function dashboard() {
 
     async refresh() {
       this.loading = true;
-      await fetch('/api/refresh');
+      await this.safeFetch('/api/refresh', { method: 'POST' });
       await this.init();
     },
 
-    async fetchOverview() { this.overview = await (await fetch('/api/overview')).json(); },
-    async fetchCostTrend() { this.costTrend = await (await fetch('/api/cost-trend')).json(); },
-    async fetchModels() { this.modelData = await (await fetch('/api/models')).json(); },
-    async fetchRepos() { this.repoList = await (await fetch('/api/repos')).json(); },
+    async safeFetch(url, opts = {}) {
+      try {
+        const r = await fetch(url, opts);
+        if (!r.ok) { console.error('API error', r.status, url); return null; }
+        return await r.json();
+      } catch (e) {
+        console.error('Fetch failed:', url, e);
+        return null;
+      }
+    },
+
+    async fetchOverview() { this.overview = await this.safeFetch('/api/overview'); },
+    async fetchCostTrend() { this.costTrend = await this.safeFetch('/api/cost-trend') || []; },
+    async fetchModels() { this.modelData = await this.safeFetch('/api/models') || { models: [], totals: {} }; },
+    async fetchRepos() { this.repoList = await this.safeFetch('/api/repos') || []; },
 
     async fetchSessions() {
       const p = new URLSearchParams({ limit: this.sessionLimit, sort: this.filterSort });
       if (this.filterRepo) p.set('repo', this.filterRepo);
       if (this.filterModel) p.set('model', this.filterModel);
       if (this.filterSince) p.set('since', this.filterSince);
-      this.sessionList = await (await fetch('/api/sessions?' + p)).json();
+      this.sessionList = await this.safeFetch('/api/sessions?' + p) || [];
     },
 
     async toggleDetail(id) {
       if (this.expandedId === id) { this.expandedId = null; this.detailData = null; return; }
       this.expandedId = id;
       this.detailData = null;
-      this.detailData = await (await fetch('/api/session/' + id)).json();
+      const data = await this.safeFetch('/api/session/' + id);
+      this.detailData = (data && !data.error) ? data : null;
     },
 
     renderCostChart() {

@@ -286,9 +286,10 @@ def _apply_shutdown_data(info: SessionInfo, data: dict[str, Any]) -> None:
             total_inp += usage.get("inputTokens", 0)
             total_cache_r += usage.get("cacheReadTokens", 0)
             total_cache_w += usage.get("cacheWriteTokens", 0)
-        # Override only when we got real data from modelMetrics
-        if total_out > 0:
-            info.output_tokens = total_out
+        # Override unconditionally when model_metrics is present — even if 0,
+        # it takes precedence over accumulated assistant.message fallback to
+        # keep all token fields internally consistent.
+        info.output_tokens = total_out
         info.input_tokens = total_inp
         info.cache_read_tokens = total_cache_r
         info.cache_write_tokens = total_cache_w
@@ -381,14 +382,15 @@ def parse_events(filepath: Path, *, detailed: bool = False) -> SessionInfo:
                     # subagent.totalTokens is input+output combined and is already
                     # included in session.shutdown modelMetrics — only used as fallback.
                     info.subagent_tokens += data.get("totalTokens", 0)
-                    subagent_details.append({
-                        "agentName": data.get("agentName", ""),
-                        "agentDisplayName": data.get("agentDisplayName", ""),
-                        "model": data.get("model", ""),
-                        "totalToolCalls": data.get("totalToolCalls", 0),
-                        "totalTokens": data.get("totalTokens", 0),
-                        "durationMs": data.get("durationMs", 0),
-                    })
+                    if detailed:
+                        subagent_details.append({
+                            "agentName": data.get("agentName", ""),
+                            "agentDisplayName": data.get("agentDisplayName", ""),
+                            "model": data.get("model", ""),
+                            "totalToolCalls": data.get("totalToolCalls", 0),
+                            "totalTokens": data.get("totalTokens", 0),
+                            "durationMs": data.get("durationMs", 0),
+                        })
 
                 elif etype == "tool.execution_start":
                     info.tool_call_count += 1
@@ -488,7 +490,9 @@ def load_all_sessions(
                         pass
 
             sessions.append(info)
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"[warn] Failed to load session {d.name}: {e}", file=sys.stderr)
             continue
 
     return sessions

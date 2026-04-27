@@ -5,7 +5,6 @@ Web analytics dashboard for GitHub Copilot CLI session data. Visualizes token us
 ## Prerequisites
 
 - Python 3.9+
-- [copilot-hud](https://github.com/BlueSkyXN/copilot-hud) cloned at `../copilot-hud/` (sibling directory)
 
 ## Quick Start
 
@@ -22,17 +21,18 @@ Open http://localhost:8765
 - **Cost trend**: Daily cost chart (30d / 90d / All selectable)
 - **Model distribution**: Doughnut chart + breakdown table with totals
 - **Session list**: Filterable by repository, model, date range; sortable by cost/tokens
-- **Session detail**: Per-session token breakdown, tool distribution, model switches
+- **Session detail**: Per-session token breakdown, tool distribution, model switches, SQLite enrichment (turn counts, files modified, refs)
 - **Pricing transparency**: `/api/pricing` exposes all rates (Copilot Enterprise internal)
 
 ## Architecture
 
 ```
-app.py          FastAPI backend — imports all parsing/pricing from copilot-hud
-web/index.html  Single-page dashboard — Alpine.js + Chart.js + Tailwind (CDN)
+app.py              FastAPI backend — imports parsing/pricing from lib/
+lib/session_parser.py  Self-contained session parser and pricing engine
+web/index.html      Single-page dashboard — Alpine.js + Chart.js + Tailwind (CDN)
 ```
 
-The backend imports `copilot-manager.py` from the sibling `copilot-hud` repo via `importlib`, ensuring cost calculations always match the CLI tool.
+Fully independent — no external repo dependencies. All session parsing and Copilot Enterprise pricing logic lives in `lib/session_parser.py`.
 
 ## API Endpoints
 
@@ -43,7 +43,7 @@ The backend imports `copilot-manager.py` from the sibling `copilot-hud` repo via
 | `GET /api/cost-trend?days=30` | Daily cost trend (omit `days` for all-time) |
 | `GET /api/models` | Model distribution with totals |
 | `GET /api/sessions?limit=50&repo=&model=&since=YYYY-MM-DD&sort=cost` | Session list |
-| `GET /api/session/{id}` | Full session detail (supports short ID prefix) |
+| `GET /api/session/{id}` | Full session detail (supports 8+ char ID prefix) |
 | `GET /api/repos` | Repository list with session counts |
 | `GET /api/pricing` | Current pricing table |
 | `POST /api/refresh` | Reload session cache from disk |
@@ -55,4 +55,4 @@ The backend imports `copilot-manager.py` from the sibling `copilot-hud` repo via
 uvicorn app:app --port 8765 --reload
 ```
 
-Sessions are cached in memory at startup (~10s for 300+ sessions). Use `/api/refresh` or restart to pick up new sessions.
+Sessions are cached in memory at startup (~10s for 300+ sessions). Use `POST /api/refresh` or restart to pick up new sessions.
